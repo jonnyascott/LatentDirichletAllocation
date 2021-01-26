@@ -1,5 +1,5 @@
-import numpy as np
 import math
+import numpy as np
 
 from scipy.special import gamma as gamma_func
 from scipy.special import loggamma, digamma, polygamma
