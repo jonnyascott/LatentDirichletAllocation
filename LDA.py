@@ -20,12 +20,12 @@ class LatentDirichletAllocation:
 			print("Alpha illegal: ", self.params['alpha'])
 			legal = False
 
-		if (self.params['beta'] < 0).any() or (np.abs(self.params['beta'].sum(axis=1) - 1 ) > 0.001).any():
+		if (self.params['beta'] < 0).any() or (not np.allclose(self.params['beta'].sum(axis=1),1)):
 			legal = False
 			print("Beta illegal: ", self.params['beta'])
 			if (self.params['beta'] < 0).any():
 				print("Beta negative")
-			if (np.abs(self.params['beta'].sum(axis=1) - 1 ) > 0.001).any():
+			if not np.allclose(self.params['beta'].sum(axis=1),1):
 				print("Beta not summing to 1: ", self.params['beta'].sum(axis=1))
 
 
@@ -34,12 +34,12 @@ class LatentDirichletAllocation:
 				legal = False
 				print("Gamma {} illegal: ".format(d), self.params['gamma'][d])
 
-			if (self.params['phi'][d] < 0).any() or (np.abs(self.params['phi'][d].sum(axis=1) - 1) > 0.001).any():
+			if (self.params['phi'][d] < 0).any() or (not np.allclose(self.params['phi'][d].sum(axis=1),1)):
 				legal = False
 				print("Phi {} illegal: ".format(d))
 				if (self.params['phi'][d] < 0).any():
 					print("Phi {} negative".format(d))
-				if (np.abs(self.params['phi'][d].sum(axis=1) - 1) > 0.001).any():
+				if not np.allclose(self.params['phi'][d].sum(axis=1),1):
 					print("Phi {} not summing to 1".format(d))
 		if legal:
 			print("All parameters legal.")
@@ -47,6 +47,7 @@ class LatentDirichletAllocation:
 
 	#Initialize parameters of lda and of approximate posterior distributions
 	def initialize_params(self, X):
+		M = len(X)
 		V = X[0].shape[1]
 		params = {}
 
@@ -56,11 +57,11 @@ class LatentDirichletAllocation:
 			params['eta'] = 0.01 #TO BE COMPLETED
 		else:
 			params['beta'] = 1/V * np.ones((self.k, V)) + np.random.normal(loc=0, scale=0.1/V, size=(self.k, V)) #TO BE COMPLETED
-			params['beta'] /= np.sum(params['beta'], axis=1)[:, np.newaxis]
+			params['beta'] /= params['beta'].sum(axis=1, keepdims=True)
 
 		#add variational parameters
-		params['phi'] = [(1/self.k) * np.ones((X[d].shape[0], self.k)) for d in range(len(X))]
-		params['gamma'] = [params['alpha'] + X[d].shape[0]/self.k for d in range(len(X))]
+		params['phi'] = [(1/self.k) * np.ones((doc.shape[0], self.k)) for doc in X]
+		params['gamma'] = [params['alpha'] + doc.shape[0]/self.k for doc in X]
 		if self.smoothing:
 			params['lambda'] = np.ones((self.k,V)) + np.random.normal(loc=0, scale=0.01, size=(self.k,V)) #TO BE COMPLETED
 
@@ -85,21 +86,18 @@ class LatentDirichletAllocation:
 			l += self.k * (loggamma(V*eta) - V*loggamma(eta))
 			l += (eta-1) * (np.sum(digamma(lambda_)) - V * np.sum(digamma(np.sum(lambda_, axis=1))))
 			l -= np.sum(loggamma(np.sum(lambda_, axis=1)) - np.sum(loggamma(lambda_), axis=1))
-			l -= np.sum((lambda_-1) * (digamma(lambda_) - digamma(np.sum(lambda_, axis=1))[:,np.newaxis]))
+			l -= np.sum((lambda_-1) * (digamma(lambda_) - digamma(lambda_.sum(axis=1, keepdims=True))))
 
 
-		for d in range(len(X)):
-			phi = self.params['phi'][d]
-			gamma = self.params['gamma'][d]
-			
+		for x, phi, gamma in zip(X, self.params['phi'], self.params['gamma']):
 			digamma_diff = digamma(gamma) - digamma(gamma.sum())
 
 			#in smoothed case use expectation of beta under vartiational distribution in non-smoothed use beta
 			if self.smoothing:
-				expected_beta = digamma(lambda_) - digamma(np.sum(lambda_, axis=1))[:,np.newaxis]
-				l += (phi * (X[d].dot(expected_beta.T))).sum()
+				expected_beta = digamma(lambda_) - digamma(lambda_.sum(axis=1,keepdims=True))
+				l += (phi * (x.dot(expected_beta.T))).sum()
 			else:
-				l += (phi * (X[d].dot(np.log(beta.T)))).sum()
+				l += (phi * (x.dot(np.log(beta.T)))).sum()
 
 			
 			#remaining terms are independent of smoothing
@@ -113,21 +111,21 @@ class LatentDirichletAllocation:
 	#Fit LDA to corpus X using variational EM
 	#X is a list of length M, of N_d x V arrays, M is number of documents in corpus, V is size of vocabulary,
 	#N_d is number of words in doc d. One hot encoding of each word.   
-	def fit(self, X, X_form="bow"):
+	def fit(self, X):
 		self.initialize_params(X)
 
 		converged = False
-		eps = 0.001
+		eps = 0.01
 		print(self.L(X))
 
 		while not converged:
 			l_old = self.L(X)
 			self.e_step(X)
 			print("E-Step Complete, l: {}".format(self.L(X)))
-			self.legal_params(X)
+			#self.legal_params(X)
 			self.m_step(X)
-			print("E-Step Complete, l: {}".format(self.L(X)))
-			self.legal_params(X)
+			print("M-Step Complete, l: {}".format(self.L(X)))
+			#self.legal_params(X)
 			l_new = self.L(X)
 			converged = (np.abs(l_new - l_old) < eps)
 			print("l:", l_new)
@@ -140,6 +138,10 @@ class LatentDirichletAllocation:
 			#check if L is nan
 			assert self.L(X)==self.L(X)
 
+		print("alpha: ", self.params['alpha'])
+		print("beta: ", self.params['beta'])
+
+
 
 
 
@@ -149,25 +151,24 @@ class LatentDirichletAllocation:
 		
 		converged = False
 		while not converged:
-			old_phi = {}
-			old_gamma = {}
-			for d in range(len(X)):
-				old_phi[d] = self.params['phi'][d].copy()
-				old_gamma[d] = self.params['gamma'][d].copy()
+			old_phis = []
+			old_gammas = []
+			for d, (x, phi, gamma) in enumerate(zip(X, self.params['phi'], self.params['gamma'])):
+				old_phis.append(phi.copy())
+				old_gammas.append(gamma.copy())
 
 				#update phi
 				if self.smoothing:
-					digamma_diff_gamma = digamma(self.params['gamma'][d]) - digamma(self.params['gamma'][d].sum())
-					digamma_diff_beta = digamma(X[d].dot(self.params['lambda'].T)) - digamma(self.params['lambda'].sum(axis=1))
+					digamma_diff_gamma = digamma(gamma) - digamma(gamma.sum())
+					digamma_diff_beta = digamma(x.dot(self.params['lambda'].T)) - digamma(self.params['lambda'].sum(axis=1))
 					self.params['phi'][d] = np.exp(digamma_diff_beta + digamma_diff_gamma)
 				else:
 					beta = self.params['beta']
-					digamma_diff = digamma(self.params['gamma'][d]) - digamma(self.params['gamma'][d].sum())
+					digamma_diff = digamma(gamma) - digamma(gamma.sum())
 					diagonal = np.diag(np.exp(digamma_diff))
-					self.params['phi'][d] = X[d].dot(beta.T.dot(diagonal))
+					self.params['phi'][d] = x.dot(beta.T.dot(diagonal))
 				#Normalize multinomial rows
-				row_sums = np.sum(self.params['phi'][d], axis = 1)[:, np.newaxis]
-				self.params['phi'][d] /= row_sums
+				self.params['phi'][d] /= self.params['phi'][d].sum(axis=1, keepdims=True)
 
 				#update gamma
 				self.params['gamma'][d] = self.params['alpha'] + np.sum(self.params['phi'][d], axis=0)
@@ -177,12 +178,12 @@ class LatentDirichletAllocation:
 			if self.smoothing:
 				old_lambda = self.params['lambda'].copy()
 				self.params['lambda'] = self.params['eta']
-				for d in range(len(X)):
-					self.params['lambda'] += self.params['phi'][d].T.dot(X[d])
+				for x, phi in zip(X,self.params['phi'][d]):
+					self.params['lambda'] += phi.T.dot(x)
 
 			#check convergence of variational parameters
-			change_phi_norms = [np.sqrt(np.sum((self.params['phi'][d] - old_phi[d])**2)) for d in range(len(X))]
-			change_gamma_norms = [np.sqrt(np.sum((self.params['gamma'][d] - old_gamma[d])**2)) for d in range(len(X))]
+			change_phi_norms = [np.sqrt(np.sum((phi-old_phi)**2)) for phi,old_phi in zip(self.params['phi'],old_phis)]
+			change_gamma_norms = [np.sqrt(np.sum((gamma-old_gamma)**2)) for gamma,old_gamma in zip(self.params['gamma'],old_gammas)]
 			if self.smoothing:
 				change_lambda_norm = np.sqrt(np.sum((self.params['lambda'] - old_lambda)**2))
 			else:
@@ -193,27 +194,27 @@ class LatentDirichletAllocation:
 
 	#Update lda params alpha and beta, in smoothed case alpha and eta
 	def m_step(self, X):
+		M = len(X)
 		#update alpha
 		alpha = self.params['alpha']
-		print("alpha: ", alpha)
 		converged = False
 		eps = 0.001
 		while not converged:
 			alpha_old = alpha.copy()
-			h = -len(X) * polygamma(1, alpha)
-			z = len(X) * polygamma(1, np.sum(alpha))
-			g = len(X) * (digamma(np.sum(alpha)) - digamma(alpha))
-			for d in range(len(X)):
-				gamma = self.params['gamma'][d]
-				print("gamma {}".format(d), gamma)
+			h = -M * polygamma(1, alpha)
+			z = M * polygamma(1, np.sum(alpha))
+			g = M * (digamma(np.sum(alpha)) - digamma(alpha))
+			for gamma in self.params['gamma']:
 				g += (digamma(gamma) - digamma(np.sum(gamma)))
 
 	
 			c = np.sum(g/h) / (z**(-1.0) + np.sum(h**(-1.0)))
 
 			alpha = alpha - ((g - c) / h)
-			print("alpha: ", alpha)
 			#check if any alpha component is non-positive after the update
+			mask = (alpha <= 0)
+			alpha[mask] = 0.00001
+
 			assert (alpha > 0).all()
 
 			# if t%10 == 0:
@@ -257,40 +258,39 @@ class LatentDirichletAllocation:
 		else:
 			#update beta
 			beta = np.zeros_like(self.params['beta'])
-			for d in range(len(X)):
-				phi = self.params['phi'][d]
-				beta += phi.T.dot(X[d])
+			for phi, x in zip(self.params['phi'], X):
+				beta += phi.T.dot(x)
 			#smooth beta so non-zero
 			beta += 0.0000001
-			beta /= np.sum(beta, axis=1)[:, np.newaxis]
+			beta /= beta.sum(axis=1, keepdims=True)
 			self.params['beta'] = beta
 
-test_LDA = LatentDirichletAllocation(n_components=2, smoothing=False)
+# test_LDA = LatentDirichletAllocation(n_components=2, smoothing=False)
 
-doc1 = np.array([
-	[1,0,0,0,0,0],
-	[0,1,0,0,0,0],
-	[0,0,1,0,0,0],
-	[1,0,0,0,0,0],
-	[0,1,0,0,0,0],
-	[0,0,1,0,0,0],
-	[1,0,0,0,0,0],
-	[0,1,0,0,0,0],
-	[0,0,1,0,0,0],
-		])
+# doc1 = np.array([
+# 	[1,0,0,0,0,0],
+# 	[0,1,0,0,0,0],
+# 	[0,0,1,0,0,0],
+# 	[1,0,0,0,0,0],
+# 	[0,1,0,0,0,0],
+# 	[0,0,1,0,0,0],
+# 	[1,0,0,0,0,0],
+# 	[0,1,0,0,0,0],
+# 	[0,0,1,0,0,0],
+# 		])
 
-doc2 = np.array([
-	[0,0,0,1,0,0],
-	[0,0,0,0,1,0],
-	[0,0,0,0,0,1],
-	[0,0,0,1,0,0],
-	[0,0,0,0,1,0],
-	[0,0,0,0,0,1],
-	[0,0,0,1,0,0],
-	[0,0,0,0,1,0],
-	[0,0,0,0,0,1],
-		])
+# doc2 = np.array([
+# 	[0,0,0,1,0,0],
+# 	[0,0,0,0,1,0],
+# 	[0,0,0,0,0,1],
+# 	[0,0,0,1,0,0],
+# 	[0,0,0,0,1,0],
+# 	[0,0,0,0,0,1],
+# 	[0,0,0,1,0,0],
+# 	[0,0,0,0,1,0],
+# 	[0,0,0,0,0,1],
+# 		])
 
-X = [doc1, doc2]
-test_LDA.fit(X)
+# X = [doc1, doc2]
+# test_LDA.fit(X)
 
