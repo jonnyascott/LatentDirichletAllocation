@@ -1,2 +1,2 @@
 #LDA
-Implementation of Latent Dirichlet Allocation
+Implementation of LDA 
