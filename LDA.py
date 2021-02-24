@@ -7,6 +7,7 @@ from scipy.special import loggamma, digamma, polygamma
 from sklearn.decomposition import LatentDirichletAllocation as LDA_correct
 from helper_functions import bow_to_onehot
 
+
 class LatentDirichletAllocation:
 
 	def __init__(self, n_components=10, smoothing=False):
